@@ -1,0 +1,133 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © igorokbro
+
+//@version=4
+study("Signal BRO", shorttitle="Signal BUY/LONG by IgorokBRO", overlay=true)
+
+// Загальні вхідні параметри
+showTrend = input(true, title="Виводити TEMA?")  
+colorTrend = input(true, title="Змінювати колір тренду?")
+showtext = input(true, title="Показувати сигнал?")
+uselabel = input(true, title="Використовувати мітки? (максимум 50)")
+nfilter = input(true, title="Фільтр шуму увімкнено/вимкнено?")
+showperc = input(false, title="Показувати % зміни з останньої купівлі/продажу")
+useCurrentRes = input(true, title="Використовувати поточний часовий проміжок для фільтрів?")
+resCustom = input(title="Використовувати інший часовий проміжок для фільтрації? Зняти галочку вище", type=input.resolution, defval="60")
+len = input(10, title="Період TEMA")
+FfastLength = input(12, minval=1, title="Період швидкого фільтра")
+FslowLength = input(26, minval=1, title="Період повільного фільтра")
+FsignalLength = input(9, minval=1, title="Період сигнальної лінії фільтра")
+minProfitPercent = input(5, title="Мінімальний відсоток потенційного прибутку")
+showStopLossLevels = input(true, title = "Stop Loss")
+
+// Доданий RSI фільтр
+useRSIFilter = input(true, title="Використовувати RSI фільтр?(Для позиційного трейдігну HOLD)")
+rsiLength = input(14, title="RSI період")
+rsiOverbought = input(70, title="RSI перекупленість")
+rsiOversold = input(30, title="RSI перепроданість")
+
+// Отримання реальної ціни закриття
+t_id = tickerid(syminfo.prefix, syminfo.ticker)
+realC = security(t_id, timeframe.period, close)
+
+// Оголошення змінних
+var float buyprice = na
+var float sellprice = na
+var bool last_tran = na
+
+// Оголошення змінних ATR
+atrLength = input(14, title="ATR період")
+atrMultiplier = input(1.5, title="ATR множник")
+atrValue = atr(atrLength)
+atrStopLossOffset = atrValue * atrMultiplier
+
+// Функція обрізки значень
+truncate(number, decimals) =>
+    factor = pow(10, decimals)
+    int(number * factor) / factor
+
+// Визначення потрійної Експоненціальної середньої (TEMA) та її тренду
+getTEMA(len) =>
+    ema1 = ema(realC, len)
+    ema2 = ema(ema1, len)
+    ema3 = ema(ema2, len)
+    avg = 3 * (ema1 - ema2) + ema3
+    avg
+
+t_UP = getTEMA(len) >= security(t_id, timeframe.period, getTEMA(len)[1])
+t_DOWN = not t_UP
+t_NON = t_UP == t_DOWN
+
+// Фільтрація за допомогою MACD
+getMACD(FfastLength, FslowLength, FsignalLength) =>
+    FfastMA = ema(close, FfastLength)
+    FslowMA = ema(close, FslowLength)
+    Fmacd = FfastMA - FslowMA
+    Fsignal = sma(Fmacd, FsignalLength)
+    [Fmacd, Fsignal]
+
+[Fmacd, Fsignal] = getMACD(FfastLength, FslowLength, FsignalLength)
+Fbuy = crossover(Fmacd, Fsignal) or not nfilter
+Fsell = crossunder(Fmacd, Fsignal) or not nfilter
+
+// Доданий RSI фільтр
+rsiValue = rsi(close, rsiLength)
+rsiBuyCondition = useRSIFilter ? rsiValue < rsiOversold : true
+rsiSellCondition = useRSIFilter ? rsiValue > rsiOverbought : true
+
+// Розрахунок рівнів стоп-лосс
+stopLossLevelLong = buyprice - atrStopLossOffset
+stopLossLevelShort = sellprice + atrStopLossOffset
+
+// Відображення графіку TEMA
+plot(getTEMA(len), title="TEMA", style=plot.style_line, linewidth=2, color=color.new(colorTrend ? t_UP ? color.lime : color.red : color.aqua, iff(showTrend, 0, 100)))
+
+// Умови входу та виходу з позицій
+long = t_UP and not last_tran and not t_NON and Fbuy and rsiBuyCondition and barstate.isconfirmed
+short = t_DOWN and last_tran and not t_NON and Fsell and rsiSellCondition and barstate.isconfirmed
+
+// Встановлення цін купівлі та продажу
+if long
+    buyprice := realC
+    last_tran := true
+if short
+    sellprice := realC
+    last_tran := false
+
+// Розрахунок % зміни з моменту останньої трансакції
+PercVal = iff(last_tran, 100 * (realC - buyprice) / buyprice, 100 * (realC - sellprice) / sellprice)
+PercCol = iff(PercVal >= 0, color.lime, color.orange)
+
+// Відображення % зміни на графіку
+if showperc
+    var label percLab = na
+    label.delete(percLab)
+    percLab := label.new(x=bar_index, y=high, yloc=yloc.abovebar, color=color.blue, textcolor=PercCol, style=label.style_none)
+    label.set_text(id=percLab, text=tostring(truncate(PercVal, 2)) + " %")
+
+// Умови купівлі та продажу з урахуванням мінімального відсоткового прибутку
+goodlong = long and (realC - buyprice) / buyprice >= minProfitPercent / 100
+goodshort = short and (sellprice - buyprice) / buyprice >= minProfitPercent / 100
+
+txtlight_b = color.lime
+txtlight_s = iff(goodshort, color.red, color.orange)
+
+buytxt = tostring(truncate(buyprice, 4))
+selltxt = tostring(truncate(sellprice, 4))
+
+alertcondition(long, title='Сигнал на купівлю', message='Сигнал на купівлю')
+alertcondition(short, title='Сигнал на продаж', message='Сигнал на продаж')
+
+// Відображення рівнів стоп-лосс, якщо параметр включений
+plot(showStopLossLevels ? stopLossLevelLong : na, color=color.red, title="Stop Loss (Long)", linewidth=2, style=plot.style_cross)
+plot(showStopLossLevels ? stopLossLevelShort : na, color=color.green, title="Stop Loss (Short)", linewidth=2, style=plot.style_cross)
+
+
+// Відображення сигналів купівлі та продажу
+if uselabel and long and showtext
+    label.new(bar_index, high, buytxt, yloc=yloc.belowbar, color=txtlight_b, textcolor=color.white, style=label.style_triangleup, size=size.small)
+if uselabel and short and showtext
+    label.new(bar_index, high, selltxt, yloc=yloc.abovebar, color=txtlight_s, textcolor=color.white, style=label.style_triangledown, size=size.small)
+
+plotshape(not uselabel and long and showtext, title="Сигнал на купівлю", color=txtlight_b, style=shape.triangleup, size=size.small, location=location.belowbar)
+plotshape(not uselabel and short and showtext, title="Сигнал на продаж", color=txtlight_s, style=shape.triangledown, size=size.small, location=location.abovebar)
